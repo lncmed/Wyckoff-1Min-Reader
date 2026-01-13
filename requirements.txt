@@ -2,3 +2,4 @@ akshare
 pandas
 openai
 python-dotenv
+mplfinance

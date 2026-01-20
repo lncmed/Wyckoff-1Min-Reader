@@ -3,11 +3,11 @@ name: Monitor Telegram for New Stocks
 on:
   workflow_dispatch:      # 允许手动触发
   schedule:
-    # UTC 0:00 - 9:00 = 北京时间 8:00 - 17:00 (每30分钟运行一次)
+    # 1. 北京时间 07:00 - 07:30 (对应 UTC 前一天的 23:00 - 23:30)
+    - cron: "*/30 23 * * *"
+    
+    # 2. 北京时间 08:00 - 17:30 (对应 UTC 当天的 00:00 - 09:30)
     - cron: "*/30 0-9 * * *"
-
-permissions:
-  contents: write
 
 concurrency:
   group: stock-monitor
@@ -19,9 +19,6 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
-        with:
-          # 必须拉取最新代码，否则提交时会冲突
-          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -29,28 +26,15 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: pip install requests
+        # 必须安装 gspread oauth2client 用于连接 Google Sheets
+        run: pip install requests gspread oauth2client
 
-      - name: Check Telegram Messages
+      - name: Process Telegram Messages
         env:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          # Google Sheets 认证配置
+          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+          SHEET_NAME: ${{ secrets.SHEET_NAME }}
         run: |
           python add_stock.py
-
-      - name: Commit and push changes
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          
-          # 检查 stock_list.txt 是否有变化
-          git add stock_list.txt
-          
-          if git diff --staged --quiet; then
-            echo "No new stocks added."
-          else
-            git commit -m "chore: update stock list from telegram"
-            git pull --rebase origin main
-            git push origin HEAD:main
-            echo "Successfully updated stock list."
-          fi

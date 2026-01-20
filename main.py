@@ -158,7 +158,7 @@ def call_gemini_http(prompt: str) -> str:
         "safetySettings": safety_settings 
     }
     
-    resp = requests.post(url, headers=headers, json=data, timeout=120)
+    resp = requests.post(url, headers=headers, json=data, timeout=300)
     
     if resp.status_code != 200: 
         raise Exception(f"Gemini API Error {resp.status_code}: {resp.text}")
@@ -334,4 +334,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 

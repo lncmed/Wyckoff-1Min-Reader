@@ -10,6 +10,7 @@ import numpy as np
 import markdown
 from xhtml2pdf import pisa
 from sheet_manager import SheetManager 
+import concurrent.futures 
 
 # ==========================================
 # 1. 数据获取模块
@@ -19,7 +20,7 @@ def fetch_stock_data_dynamic(symbol: str, buy_date_str: str) -> dict:
     clean_digits = ''.join(filter(str.isdigit, str(symbol)))
     symbol_code = clean_digits.zfill(6)
     
-    print(f"   -> 正在分析 {symbol_code} (买入日期: {buy_date_str})...")
+    # print(f"   -> [{symbol_code}] 正在获取数据...")
 
     try:
         if buy_date_str and str(buy_date_str) != 'nan' and len(str(buy_date_str)) >= 10:
@@ -34,7 +35,7 @@ def fetch_stock_data_dynamic(symbol: str, buy_date_str: str) -> dict:
     try:
         df = ak.stock_zh_a_hist_min_em(symbol=symbol_code, period="5", start_date=start_date_em, adjust="qfq")
     except Exception as e:
-        print(f"   [Error] 5min接口报错: {e}")
+        print(f"   [Error] {symbol_code} 5min接口报错: {e}")
         return {"df": pd.DataFrame(), "period": "5m"}
 
     if df.empty:
@@ -42,7 +43,6 @@ def fetch_stock_data_dynamic(symbol: str, buy_date_str: str) -> dict:
 
     current_period = "5m"
     if len(df) > 960:
-        print(f"   [策略] 数据量大，切换至 15min...")
         try:
             df_15 = ak.stock_zh_a_hist_min_em(symbol=symbol_code, period="15", adjust="qfq")
             rename_map = {"时间": "date", "开盘": "open", "最高": "high", "最低": "low", "收盘": "close", "成交量": "volume"}
@@ -92,10 +92,10 @@ def generate_local_chart(symbol: str, df: pd.DataFrame, save_path: str, period: 
     try:
         mpf.plot(plot_df, type='candle', style=s, addplot=apds, volume=True, title=f"Wyckoff: {symbol} ({period})", savefig=dict(fname=save_path, dpi=150, bbox_inches='tight'), warn_too_much_data=2000)
     except Exception as e:
-        print(f"   [Error] 绘图失败: {e}")
+        print(f"   [Error] {symbol} 绘图失败: {e}")
 
 # ==========================================
-# 3. AI 分析模块 (3.0 Pro Preview + 安全豁免)
+# 3. AI 分析模块 (无修正版)
 # ==========================================
 
 def get_prompt_content(symbol, df, position_info):
@@ -134,9 +134,12 @@ def call_gemini_http(prompt: str) -> str:
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key: raise ValueError("GEMINI_API_KEY missing")
     
-    model_name = os.getenv("GEMINI_MODEL", "gemini-3-pro-preview") 
+    # ⚠️【遵照指示】直接使用环境变量，不做任何修正
+    # 默认值留空，强迫它读取 GEMINI_MODEL
+    model_name = os.getenv("GEMINI_MODEL") 
     
-    print(f"   >>> Gemini ({model_name})...")
+    # 打印出来确认一下
+    # print(f"   >>> Gemini 正在请求: {model_name} ...")
     
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
     headers = {'Content-Type': 'application/json'}
@@ -155,38 +158,44 @@ def call_gemini_http(prompt: str) -> str:
         "safetySettings": safety_settings 
     }
     
-    resp = requests.post(url, headers=headers, json=data, timeout=120)
+    resp = requests.post(url, headers=headers, json=data, timeout=60)
     
     if resp.status_code != 200: 
         raise Exception(f"Gemini API Error {resp.status_code}: {resp.text}")
     
     try:
         result = resp.json()
+        
+        if "error" in result:
+            raise Exception(f"API Error Logic: {result['error']}")
+
         candidates = result.get('candidates', [])
-        if not candidates: raise ValueError("No candidates")
+        if not candidates:
+            feedback = result.get('promptFeedback', 'No Feedback')
+            raise ValueError(f"No candidates returned. Feedback: {feedback}")
         
         content = candidates[0].get('content', {})
         parts = content.get('parts', [])
         
         if not parts:
-            reason = candidates[0].get('finishReason', 'UNKNOWN')
-            raise ValueError(f"Content parts empty. FinishReason: {reason}")
+            finish_reason = candidates[0].get('finishReason', 'UNKNOWN')
+            raise ValueError(f"Content parts empty. FinishReason: {finish_reason}")
             
         text = parts[0].get('text', '')
-        if not text: raise ValueError("Empty text string")
+        if not text: raise ValueError("Empty text")
         
         return text
+
     except Exception as e:
-        print(f"   [Debug] Gemini 解析失败. Status: {resp.status_code}")
-        print(f"   [Debug] 响应片段: {resp.text[:200]}") 
+        # 如果出错，打印原始内容帮助调试
+        print(f"   [Debug] {model_name} 解析崩溃. 响应片段:\n{resp.text[:500]}") 
         raise e 
 
 def call_openai_official(prompt: str) -> str:
     api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key: raise ValueError("OpenAI Key missing, cannot fallback.")
+    if not api_key: raise ValueError("OpenAI Key missing")
     
     model_name = os.getenv("AI_MODEL", "gpt-4o")
-    print(f"   >>> 🔄 Switching to OpenAI ({model_name})...")
     
     client = OpenAI(api_key=api_key)
     resp = client.chat.completions.create(
@@ -203,75 +212,38 @@ def ai_analyze(symbol, df, position_info):
     try: 
         return call_gemini_http(prompt)
     except Exception as e: 
-        print(f"   ⚠️ Gemini 失败: {e}")
+        print(f"   ⚠️ [{symbol}] Gemini ({os.getenv('GEMINI_MODEL')}) 失败: {e} -> 切 OpenAI")
         try: 
             return call_openai_official(prompt)
         except Exception as e2: 
             return f"Analysis Failed. Gemini Error: {e}. OpenAI Error: {e2}"
 
 # ==========================================
-# 4. PDF 生成模块
+# 5. 主程序 (5线程并发)
 # ==========================================
 
-def generate_pdf_report(symbol, chart_path, report_text, pdf_path):
-    html_content = markdown.markdown(report_text)
-    abs_chart_path = os.path.abspath(chart_path)
-    font_path = "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc"
-    if not os.path.exists(font_path): font_path = "msyh.ttc" 
-    
-    full_html = f"""
-    <html>
-    <head>
-        <meta charset="utf-8">
-        <style>
-            @font-face {{ font-family: "MyChineseFont"; src: url("{font_path}"); }}
-            @page {{ size: A4; margin: 1cm; }}
-            body {{ font-family: "MyChineseFont", sans-serif; font-size: 12px; line-height: 1.5; }}
-            h1, h2, h3, p, div {{ font-family: "MyChineseFont", sans-serif; color: #2c3e50; }}
-            img {{ width: 18cm; margin-bottom: 20px; }}
-            .header {{ text-align: center; margin-bottom: 20px; color: #7f8c8d; font-size: 10px; }}
-        </style>
-    </head>
-    <body>
-        <div class="header">Wyckoff Quantitative Analysis | {symbol}</div>
-        <img src="{abs_chart_path}" />
-        <hr/>
-        {html_content}
-    </body>
-    </html>
-    """
-    try:
-        with open(pdf_path, "wb") as pdf_file:
-            pisa.CreatePDF(full_html, dest=pdf_file)
-        return True
-    except: return False
-
-# ==========================================
-# 5. 主程序
-# ==========================================
-
-def process_one_stock(symbol: str, position_info: dict, generated_files: list):
+def process_one_stock(symbol: str, position_info: dict):
     clean_digits = ''.join(filter(str.isdigit, str(symbol)))
     clean_symbol = clean_digits.zfill(6)
 
-    print(f"\n{'='*40}\n🚀 开始分析: {clean_symbol}\n{'='*40}")
+    print(f"🚀 [{clean_symbol}] 开始分析...")
 
     data_res = fetch_stock_data_dynamic(clean_symbol, position_info.get('date'))
     df = data_res["df"]
     period = data_res["period"]
     
     if df.empty:
-        print(f"   [Skip] 数据为空")
-        return
+        print(f"   ⚠️ [{clean_symbol}] 数据为空，跳过")
+        return None
+    
     df = add_indicators(df)
 
     beijing_tz = timezone(timedelta(hours=8))
     ts = datetime.now(beijing_tz).strftime("%Y%m%d_%H%M%S")
     
-    # === 修复点：加回 CSV 保存逻辑 ===
+    # 保存 CSV
     csv_path = f"data/{clean_symbol}_{period}_{ts}.csv"
     df.to_csv(csv_path, index=False, encoding="utf-8-sig")
-    print(f"   💾 CSV Saved: {csv_path}")
 
     chart_path = f"reports/{clean_symbol}_chart_{ts}.png"
     pdf_path = f"reports/{clean_symbol}_report_{period}_{ts}.pdf"
@@ -280,9 +252,10 @@ def process_one_stock(symbol: str, position_info: dict, generated_files: list):
     report_text = ai_analyze(clean_symbol, df, position_info)
     
     if generate_pdf_report(clean_symbol, chart_path, report_text, pdf_path):
-        generated_files.append(pdf_path)
+        print(f"✅ [{clean_symbol}] 报告生成完毕")
+        return pdf_path
     
-    print(f"✅ {clean_symbol} 处理完成")
+    return None
 
 def main():
     os.makedirs("data", exist_ok=True)
@@ -298,10 +271,22 @@ def main():
         return
 
     generated_pdfs = []
-    for i, (symbol, info) in enumerate(stocks_dict.items()):
-        try: process_one_stock(symbol, info, generated_pdfs)
-        except Exception as e: print(f"❌ {symbol} 错误: {e}")
-        if i < len(stocks_dict) - 1: time.sleep(5)
+    
+    # 5 线程并发
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        future_to_symbol = {
+            executor.submit(process_one_stock, symbol, info): symbol 
+            for symbol, info in stocks_dict.items()
+        }
+        
+        for future in concurrent.futures.as_completed(future_to_symbol):
+            symbol = future_to_symbol[future]
+            try:
+                result = future.result()
+                if result:
+                    generated_pdfs.append(result)
+            except Exception as exc:
+                print(f"❌ [{symbol}] 处理发生异常: {exc}")
 
     if generated_pdfs:
         print(f"\n📝 生成推送清单 ({len(generated_pdfs)}):")

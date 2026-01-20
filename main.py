@@ -134,7 +134,6 @@ def call_gemini_http(prompt: str) -> str:
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key: raise ValueError("GEMINI_API_KEY missing")
     
-    # 👇 切换为 gemini-3-pro-preview
     model_name = os.getenv("GEMINI_MODEL", "gemini-3-pro-preview") 
     
     print(f"   >>> Gemini ({model_name})...")
@@ -142,7 +141,6 @@ def call_gemini_http(prompt: str) -> str:
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
     headers = {'Content-Type': 'application/json'}
     
-    # 安全设置：BLOCK_NONE 豁免
     safety_settings = [
         {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
         {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
@@ -157,7 +155,6 @@ def call_gemini_http(prompt: str) -> str:
         "safetySettings": safety_settings 
     }
     
-    # 超时保持 120s
     resp = requests.post(url, headers=headers, json=data, timeout=120)
     
     if resp.status_code != 200: 
@@ -186,7 +183,6 @@ def call_gemini_http(prompt: str) -> str:
 
 def call_openai_official(prompt: str) -> str:
     api_key = os.getenv("OPENAI_API_KEY")
-    # 如果没有 key，直接报错，不 fallback (因为您现在余额不足)
     if not api_key: raise ValueError("OpenAI Key missing, cannot fallback.")
     
     model_name = os.getenv("AI_MODEL", "gpt-4o")
@@ -272,6 +268,11 @@ def process_one_stock(symbol: str, position_info: dict, generated_files: list):
     beijing_tz = timezone(timedelta(hours=8))
     ts = datetime.now(beijing_tz).strftime("%Y%m%d_%H%M%S")
     
+    # === 修复点：加回 CSV 保存逻辑 ===
+    csv_path = f"data/{clean_symbol}_{period}_{ts}.csv"
+    df.to_csv(csv_path, index=False, encoding="utf-8-sig")
+    print(f"   💾 CSV Saved: {csv_path}")
+
     chart_path = f"reports/{clean_symbol}_chart_{ts}.png"
     pdf_path = f"reports/{clean_symbol}_report_{period}_{ts}.pdf"
     

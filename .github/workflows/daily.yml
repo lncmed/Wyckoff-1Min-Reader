@@ -85,7 +85,7 @@ jobs:
             git push origin HEAD:main
           fi
 
-      # === 6. 精准推送本次生成的报告 ===
+     # === 6. 推送报告 (修复版：去除了Emoji，简化了引号逻辑) ===
       - name: Notify Telegram (Push List)
         if: success()
         env:
@@ -93,18 +93,43 @@ jobs:
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
         shell: bash
         run: |
-          set -euo pipefail
+          # 开启错误检测，但允许 read 返回非零（处理最后一行）
+          set -u
           
           if [ ! -f push_list.txt ]; then
-            echo "::warning::没有找到 push_list.txt，本次运行没有新报告产生。"
+            echo "::warning::File push_list.txt not found, skipping."
             exit 0
           fi
           
-          echo "=== 开始推送 push_list.txt 中的文件 ==="
+          echo "=== Start Pushing Files ==="
           
+          # 使用更安全的循环方式读取文件
           while IFS= read -r PDF_FILE || [ -n "$PDF_FILE" ]; do
-            # 去除可能的空白符
+            # 去除首尾空白符
             PDF_FILE=$(echo "$PDF_FILE" | xargs)
             
-            if [ -f "$PDF_FILE" ]; then
-              echo "--------------------------------
+            # 检查文件是否存在且不为空
+            if [ -n "$PDF_FILE" ] && [ -f "$PDF_FILE" ]; then
+              echo "----------------------------------------"
+              echo "Sending: $PDF_FILE"
+              
+              # 提取文件名
+              FILENAME=$(basename "$PDF_FILE")
+              # 定义 Caption 变量 (不含特殊字符，纯英文)
+              CAPTION="Analysis Report: $FILENAME"
+              
+              # 执行发送 (分行写，注意反斜杠后不能有空格)
+              curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendDocument" \
+                -F "chat_id=${TG_CHAT_ID}" \
+                -F "document=@$PDF_FILE" \
+                -F "caption=$CAPTION"
+                
+              echo "Sent successfully."
+              # 避免发送太快触发限制
+              sleep 3
+            else
+              echo "File not found or empty: $PDF_FILE"
+            fi
+          done < push_list.txt
+          
+          echo "=== Finished ==="

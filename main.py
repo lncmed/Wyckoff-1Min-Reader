@@ -18,7 +18,7 @@ import re
 from typing import Optional
 
 # ==========================================
-# 0) Gemini 稳定性增强：429 退避重试
+# 0) Gemini 稳定性增强：429 退避 + 致命错误熔断
 # ==========================================
 
 class GeminiQuotaExceeded(Exception):
@@ -27,6 +27,10 @@ class GeminiQuotaExceeded(Exception):
 
 class GeminiRateLimited(Exception):
     """短期速率限制：可退避重试。"""
+    pass
+
+class GeminiFatalError(Exception):
+    """致命错误（如 API Key 无效）：绝对不可重试。"""
     pass
 
 def _extract_retry_seconds(resp: requests.Response) -> int:
@@ -91,6 +95,11 @@ def call_gemini_http(prompt: str) -> str:
                     return result["candidates"][0]["content"]["parts"][0]["text"]
                 except:
                     raise ValueError(f"Invalid response: {str(result)[:200]}")
+            
+            # 🛑 致命错误熔断：400 (Bad Request / Invalid Key)
+            # 遇到这种情况，重试没有任何意义，直接抛出 FatalError
+            if resp.status_code == 400:
+                raise GeminiFatalError(f"Gemini API Key 无效或参数错误 (HTTP 400): {resp.text[:200]}")
 
             if resp.status_code == 429:
                 if _is_quota_exhausted(resp):
@@ -115,7 +124,15 @@ def call_gemini_http(prompt: str) -> str:
 
             raise Exception(f"HTTP {resp.status_code}: {resp.text[:200]}")
 
-        except GeminiQuotaExceeded: raise
+        # 捕获异常处理
+        except GeminiFatalError:
+            # 遇到致命错误，直接往上抛，不进行后续的重试循环
+            raise 
+
+        except GeminiQuotaExceeded:
+            # 配额耗尽，直接往上抛，交给上层切 OpenAI
+            raise 
+
         except Exception as e:
             last_err = e
             if attempt == max_retries: raise
@@ -137,9 +154,6 @@ def _get_baostock_code(symbol: str) -> str:
     return f"sz.{symbol}"
 
 def fetch_stock_data_dynamic(symbol: str, timeframe_str: str, bar_count_str: str) -> dict:
-    """
-    Your optimized version: robust datetime parsing, index fixing, and volume alignment.
-    """
     clean_digits = ''.join(filter(str.isdigit, str(symbol)))
     symbol_code = clean_digits.zfill(6)
     
@@ -178,16 +192,12 @@ def fetch_stock_data_dynamic(symbol: str, timeframe_str: str, bar_count_str: str
                 df_bs = pd.DataFrame(data_list, columns=rs.fields)
                 
                 if not df_bs.empty:
-                    # 关键修复：用 time 解析出真正的时间戳
                     df_bs["date"] = pd.to_datetime(df_bs["time"], format="%Y%m%d%H%M%S000", errors="coerce")
                     df_bs = df_bs.drop(columns=["time"], errors="ignore")
-                    
                     cols = ["open", "high", "low", "close", "volume"]
                     for c in cols:
                         df_bs[c] = pd.to_numeric(df_bs[c], errors="coerce")
-                    
                     df_bs = df_bs.dropna(subset=["date", "close"])
-                    # 强制列顺序
                     df_bs = df_bs[["date", "open", "high", "low", "close", "volume"]]
         bs.logout()
     except Exception as e:
@@ -201,18 +211,13 @@ def fetch_stock_data_dynamic(symbol: str, timeframe_str: str, bar_count_str: str
         if not df_ak.empty:
             rename_map = {"时间": "date", "开盘": "open", "最高": "high", "最低": "low", "收盘": "close", "成交量": "volume"}
             df_ak = df_ak.rename(columns={k: v for k, v in rename_map.items() if k in df_ak.columns})
-            
             df_ak["date"] = pd.to_datetime(df_ak["date"], errors="coerce")
             cols = ["open", "high", "low", "close", "volume"]
             for c in cols:
                 df_ak[c] = pd.to_numeric(df_ak[c], errors="coerce")
-            
-            # 0值修复
             df_ak["open"] = df_ak["open"].replace(0, np.nan)
             df_ak["open"] = df_ak["open"].fillna(df_ak["close"].shift(1)).fillna(df_ak["close"])
-            
             df_ak = df_ak.dropna(subset=["date", "close"])
-            # 强制列顺序
             df_ak = df_ak[["date", "open", "high", "low", "close", "volume"]]
     except Exception as e:
         print(f"   [AkShare] 异常: {e}", flush=True)
@@ -221,9 +226,6 @@ def fetch_stock_data_dynamic(symbol: str, timeframe_str: str, bar_count_str: str
     if df_bs.empty and df_ak.empty:
         return {"df": pd.DataFrame(), "period": f"{tf_min}m"}
     
-    
-
-    # 自动对齐单位 (手 vs 股)
     if not df_bs.empty and not df_ak.empty:
         mean_bs = df_bs['volume'].mean()
         mean_ak = df_ak['volume'].mean()
@@ -242,16 +244,9 @@ def fetch_stock_data_dynamic(symbol: str, timeframe_str: str, bar_count_str: str
                 print(f"   ⚖️ 修正 BaoStock 单位 (x100)", flush=True)
                 df_bs['volume'] = df_bs['volume'] * 100
 
-    # ⚠️ 核心修复：ignore_index=True 避免索引冲突
     df_final = pd.concat([df_bs, df_ak], axis=0, ignore_index=True)
-    
-    # 确保列纯净
     df_final = df_final[["date", "open", "high", "low", "close", "volume"]]
-    
-    # 去重（保留 AkShare 的最新数据）
     df_final = df_final.drop_duplicates(subset=['date'], keep='last')
-    
-    # 排序
     df_final = df_final.sort_values(by='date').reset_index(drop=True)
     
     if len(df_final) > limit:
@@ -358,6 +353,10 @@ def ai_analyze(symbol, df, position_info):
 
     try:
         return call_gemini_http(prompt)
+    except GeminiFatalError as fe:
+        print(f"   ⚠️ [{symbol}] Gemini 致命错误 (Key无效/参数错) -> OpenAI: {str(fe)[:100]}", flush=True)
+        try: return call_openai_official(prompt)
+        except Exception as e2: return f"Analysis Failed. OpenAI Err: {e2}"
     except GeminiQuotaExceeded as qe:
         print(f"   ⚠️ [{symbol}] Gemini 配额耗尽 -> OpenAI", flush=True)
         try: return call_openai_official(prompt)

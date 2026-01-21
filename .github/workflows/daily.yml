@@ -51,9 +51,9 @@ jobs:
           GEMINI_MODEL: "gemini-3-flash-preview" 
           
           # 👇 3. 抗 429/503 核心配置 (对应 main.py 中的逻辑)
-          GEMINI_MAX_RETRIES: "10"     # 增加重试次数 (原默认8)
-          GEMINI_BASE_SLEEP: "10"      # 基础等待时间拉长到10秒 (原默认2.5)，给服务器更多喘息时间
-          GEMINI_TIMEOUT: "300"        # 单次请求超时时间 (5分钟)
+          GEMINI_MAX_RETRIES: "3"     # 增加重试次数 (原默认3)
+          GEMINI_BASE_SLEEP: "5"      # 基础等待时间拉长到3秒 (原默认2.5)，给服务器更多喘息时间
+          GEMINI_TIMEOUT: "60"        # 单次请求超时时间 (1分钟)
 
           # 👇 4. OpenAI 兜底配置
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}

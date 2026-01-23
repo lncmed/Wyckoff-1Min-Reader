@@ -1,2 +1,2 @@
-reports/002641_report_5m_20260123_123653.pdf
-reports/601928_report_30m_20260123_123745.pdf
+reports/002641_report_15m_20260123_133055.pdf
+reports/601928_report_15m_20260123_133147.pdf

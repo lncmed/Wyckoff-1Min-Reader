@@ -433,7 +433,7 @@ def call_custom_api(prompt: str) -> str:
         raise ValueError("CUSTOM_API_KEY missing, skipping custom API")
     
     base_url = "https://api2.qiandao.mom/v1"
-    model_name = "gemini-3-pro-preview-h"
+    model_name = "DeepSeek-V3.2-a"
     
     client = OpenAI(api_key=api_key, base_url=base_url)
     
@@ -587,3 +587,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

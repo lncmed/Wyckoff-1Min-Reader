@@ -468,47 +468,55 @@ def ai_analyze(symbol, df, position_info):
 
 
 # ==========================================
-# 4. PDF 生成模块 (核心修复：CJK 自动换行 + 长串断行)
+# 4. PDF 生成模块 (优化版：CSS控制CJK换行 + 清晰段落间距)
 # ==========================================
 
 def insert_soft_breaks(text: str) -> str:
     """
-    目标：为 xhtml2pdf/ReportLab 提供稳定的断行点，避免中文段落/长串被裁切不显示。
-    使用 chr(0x200B) 插入零宽空格，避免 Python 源码编码报错。
+    轻量化断行预处理：
+    仅处理 URL、路径、长串数字等容易造成溢出的非中文内容。
+    中文换行完全交给 xhtml2pdf 的 CSS (-pdf-word-wrap: CJK) 处理。
     """
     if not text:
         return ""
 
     zwsp = chr(0x200B)
 
-    # 1) 中文字符后插入断行点
-    # 使用 chr() 动态生成正则范围，避免 \u syntax error
-    pattern_str = f'([{chr(0x4e00)}-{chr(0x9fa5)}])'
-    text = re.sub(pattern_str, r'\1' + zwsp, text)
+    # 1) 统一换行符，防止不同平台的 \r\n 干扰 Markdown 解析
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
 
-    # 2) 常见分隔符后插入断行点（URL/路径/表达式）
+    # 2) 常见分隔符后插入 ZWSP (帮助 URL/路径/代码 换行)
+    #    只在 [/ _ - . = : ? & # %] 后面加，不碰普通内容
     text = re.sub(r'([\/\_\-\.\=\:\?\&\#\%])', r'\1' + zwsp, text)
 
-    # 3) 超长连续英文数字串：每 25 个字符插一次断行点
+    # 3) 超长连续英文数字串：每 30 字符强制打断
     def _break_long_token(m: re.Match) -> str:
         s = m.group(0)
-        step = 25
+        step = 30
         return zwsp.join(s[i:i + step] for i in range(0, len(s), step))
 
-    text = re.sub(r'[A-Za-z0-9]{40,}', _break_long_token, text)
+    text = re.sub(r'[A-Za-z0-9]{50,}', _break_long_token, text)
 
     return text
 
+
 def generate_pdf_report(symbol: str, chart_path: str, report_text: str, pdf_path: str) -> bool:
-    # 1) 预处理文本：注入断行点
+    # 1. 简单预处理
     formatted_text = insert_soft_breaks(report_text)
 
-    # 2) Markdown -> HTML
-    html_content = markdown.markdown(formatted_text, extensions=["nl2br"])
+    # 2. Markdown -> HTML
+    #    使用 extra 支持更多语法，nl2br 处理换行
+    html_content = markdown.markdown(
+        formatted_text,
+        extensions=["extra", "sane_lists", "nl2br"]
+    )
 
     abs_chart_path = os.path.abspath(chart_path)
+
+    # 字体路径检测
     font_path = "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc"
-    if not os.path.exists(font_path): font_path = "msyh.ttc"
+    if not os.path.exists(font_path):
+        font_path = "msyh.ttc"
 
     full_html = f"""
     <html>
@@ -522,10 +530,10 @@ def generate_pdf_report(symbol: str, chart_path: str, report_text: str, pdf_path
 
             @page {{
                 size: A4;
-                margin-top: 1cm;
-                margin-bottom: 1cm;
-                margin-left: 1.5cm;
-                margin-right: 1.5cm;
+                margin-top: 1.5cm;
+                margin-bottom: 1.5cm;
+                margin-left: 2cm;
+                margin-right: 2cm;
 
                 @frame footer_frame {{
                     -pdf-frame-content: footerContent;
@@ -539,81 +547,106 @@ def generate_pdf_report(symbol: str, chart_path: str, report_text: str, pdf_path
             body {{
                 font-family: "MyChineseFont", sans-serif;
                 font-size: 11px;
+                line-height: 1.6;  /* 关键：增加行高，提升阅读舒适度 */
+                color: #2c3e50;
+                text-align: justify;
+
+                /* 关键：启用 xhtml2pdf 的中文自动换行引擎 */
+                -pdf-word-wrap: CJK;
+            }}
+
+            /* 关键：显式设置段落间距，防止文字粘连 */
+            p {{
+                margin-top: 0px;
+                margin-bottom: 10px;
+                text-indent: 0;
+            }}
+
+            /* 列表优化 */
+            ul, ol {{
+                margin-top: 5px;
+                margin-bottom: 10px;
+                padding-left: 20px;
+            }}
+            li {{
+                margin-bottom: 5px;
                 line-height: 1.5;
-                color: #2c3e50;
-                text-align: left;
-                
-                /* 关键修复：xhtml2pdf 的 CJK 自动断行开关 */
-                -pdf-word-wrap: CJK;
-                
-                /* 浏览器兼容样式 */
-                white-space: normal !important;
-                word-wrap: break-word;
-                overflow-wrap: anywhere;
-                word-break: break-all;
             }}
 
-            /* 兜底：段落/列表/引用容器都启用 CJK 断行 */
-            p, div, li, blockquote {{
-                -pdf-word-wrap: CJK;
+            /* 标题样式 */
+            h1 {{ 
+                font-size: 16px; 
+                margin-top: 20px; 
+                margin-bottom: 10px; 
+                color: #e74c3c; 
+                border-bottom: 1px solid #eee; 
+                padding-bottom: 5px; 
+            }}
+            h2 {{ 
+                font-size: 14px; 
+                margin-top: 15px; 
+                margin-bottom: 8px; 
+                color: #2980b9; 
+                border-left: 4px solid #2980b9; 
+                padding-left: 8px; 
+            }}
+            h3 {{ 
+                font-size: 12px; 
+                margin-top: 10px; 
+                margin-bottom: 6px; 
+                font-weight: bold; 
+                background-color: #f2f2f2; 
+                padding: 4px; 
             }}
 
-            h1, h2, h3 {{
-                color: #2c3e50;
-                margin-top: 12px;
-                margin-bottom: 6px;
-                font-weight: bold;
-            }}
-
+            /* 图片样式 */
             img {{
                 zoom: 55%;
-                margin: 10px auto;
+                margin: 15px auto;
                 display: block;
+                border: 1px solid #ddd;
+                padding: 4px;
             }}
 
+            /* 页眉样式 */
             .header {{
                 text-align: center;
-                margin-bottom: 10px;
-                color: #7f8c8d;
-                font-size: 12px;
+                margin-bottom: 20px;
+                color: #95a5a6;
+                font-size: 10px;
                 border-bottom: 1px solid #eee;
-                padding-bottom: 5px;
+                padding-bottom: 8px;
             }}
 
-            ul, ol {{
-                margin-left: 15px;
-                padding-left: 0;
-            }}
-
-            li {{
-                margin-bottom: 3px;
-            }}
-
+            /* 引用块样式 */
             blockquote {{
-                background: #f8f9fa;
-                border-left: 3px solid #17a2b8;
-                margin: 5px 0;
-                padding: 8px;
-                color: #555;
+                background: #f9f9f9;
+                border-left: 4px solid #ccc;
+                margin: 10px 0;
+                padding: 8px 12px;
+                color: #666;
                 font-size: 10px;
             }}
 
-            /* Markdown 代码块溢出修复 */
+            /* 代码块样式 */
             pre, code {{
+                background-color: #f4f4f4;
+                font-family: Helvetica, sans-serif;
+                font-size: 10px;
                 white-space: pre-wrap;
-                -pdf-word-wrap: CJK;
+                -pdf-word-wrap: CJK; /* 确保代码块里的中文也能换行 */
                 word-wrap: break-word;
             }}
         </style>
     </head>
     <body>
-        <div class="header">Wyckoff Quantitative Analysis | {symbol}</div>
+        <div class="header">Wyckoff Quantitative Analysis Report | {symbol}</div>
 
         <div style="text-align: center;">
             <img src="{abs_chart_path}" />
         </div>
 
-        <hr style="border: 0; border-top: 1px solid #eee; margin: 10px 0;"/>
+        <hr style="border: 0; border-top: 1px solid #eee; margin: 15px 0;"/>
 
         <div style="width: 100%;">
             {html_content}
@@ -717,6 +750,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 

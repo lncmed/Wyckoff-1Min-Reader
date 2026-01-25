@@ -466,61 +466,29 @@ def ai_analyze(symbol, df, position_info):
             except Exception as e3:
                 return f"Analysis Failed. All APIs down. Error: {e3}"
 
-
 # ==========================================
-# 4. PDF 生成模块 (终极融合版：美观样式 + 核心修复)
+# 4. PDF 生成模块 (回归极简版：保留原味排版 + 修复内核Bug)
 # ==========================================
 
-def insert_soft_breaks(text: str) -> str:
-    """
-    轻量化断行预处理：仅处理超长英文/数字串，防止撑爆页面。
-    中文换行完全交给 CSS 处理。
-    """
-    if not text: return ""
+def generate_pdf_report(symbol, chart_path, report_text, pdf_path):
+    # 1. 直接转换，保留 Markdown 原始的段落结构 (<p>标签)
+    #    extensions=['extra'] 能更好支持表格和列表，但不改变段落感
+    html_content = markdown.markdown(report_text, extensions=['extra'])
     
-    # 统一换行符
-    text = text.replace("\r\n", "\n").replace("\r", "\n")
-
-    # 超长连续英文数字串打断 (每35字符加空格)
-    def _break_long_token(m: re.Match) -> str:
-        s = m.group(0)
-        step = 35
-        return " ".join(s[i:i + step] for i in range(0, len(s), step))
-
-    text = re.sub(r'[A-Za-z0-9]{50,}', _break_long_token, text)
-    return text
-
-
-def generate_pdf_report(symbol: str, chart_path: str, report_text: str, pdf_path: str) -> bool:
-    # 1. 预处理
-    formatted_text = insert_soft_breaks(report_text)
-
-    # 2. Markdown -> HTML (使用 extra 扩展以获得更好的排版支持)
-    html_content = markdown.markdown(
-        formatted_text,
-        extensions=["extra", "sane_lists", "nl2br"]
-    )
-
     abs_chart_path = os.path.abspath(chart_path)
-
-    # 字体路径
     font_path = "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc"
-    if not os.path.exists(font_path):
-        font_path = "msyh.ttc"
-
+    if not os.path.exists(font_path): font_path = "msyh.ttc" 
+    
     full_html = f"""
     <html>
     <head>
         <meta charset="utf-8">
         <style>
-            @font-face {{
-                font-family: "MyChineseFont";
-                src: url("{font_path}");
-            }}
-
-            @page {{
-                size: A4;
-                margin: 1.5cm; /* 适中的页边距 */
+            @font-face {{ font-family: "MyChineseFont"; src: url("{font_path}"); }}
+            
+            @page {{ 
+                size: A4; 
+                margin: 1.5cm; /*稍微加大一点边距，看着更舒服*/
                 @frame footer_frame {{
                     -pdf-frame-content: footerContent;
                     bottom: 0cm;
@@ -529,165 +497,69 @@ def generate_pdf_report(symbol: str, chart_path: str, report_text: str, pdf_path
                     height: 1cm;
                 }}
             }}
-
-            /* 全局重置 (但不使用 * 选择器，避免副作用) */
-            body {{
-                font-family: "MyChineseFont", sans-serif;
-                font-size: 12px;
-                line-height: 1.6; /* 增加行高，提升阅读感 */
+            
+            body {{ 
+                font-family: "MyChineseFont", sans-serif; 
+                font-size: 12px; 
+                line-height: 1.6; /* 行高1.6是阅读最舒适的比例 */
                 color: #2c3e50;
                 
-                /* ⚠️ 核心：强制中文自动换行 */
-                -pdf-word-wrap: CJK;
-                text-align: justify;
+                /* ⚠️ 唯一增加的核心修复：保证中文到行尾自动换行，不影响段落间距 */
+                -pdf-word-wrap: CJK; 
             }}
-
-            /* ----------------------------------
-               段落感的核心设置
-               ---------------------------------- */
-            p {{
-                margin-top: 0px;
-                margin-bottom: 12px; /* 段落间距，把文字撑开 */
-                text-indent: 0;
+            
+            /* 保持你喜欢的标题样式 */
+            h1, h2, h3 {{ font-family: "MyChineseFont", sans-serif; color: #2c3e50; margin-top: 20px; margin-bottom: 10px; }}
+            
+            /* 显式给段落一点点下边距，防止太挤，保持“段落感” */
+            p {{ margin-bottom: 10px; }}
+            
+            img {{ 
+                zoom: 55%; /* 用zoom比width更兼容，防止图片变形 */
+                margin: 20px auto; 
+                display: block; 
             }}
-
-            /* 标题样式 (参考了您的设计) */
-            h1 {{
-                font-size: 18px;
-                color: #2c3e50;
-                margin-top: 20px;
-                margin-bottom: 10px;
-                border-bottom: 2px solid #3498db; /* 蓝色下划线 */
-                padding-bottom: 5px;
-                font-weight: bold;
-            }}
-
-            h2 {{
-                font-size: 15px;
-                color: #2980b9;
-                margin-top: 18px;
-                margin-bottom: 10px;
-                font-weight: bold;
-            }}
-
-            h3 {{
-                font-size: 13px;
-                margin-top: 15px;
-                margin-bottom: 8px;
-                background-color: #f2f2f2;
-                padding: 5px;
-                border-left: 4px solid #3498db;
-            }}
-
-            /* 列表样式 */
-            ul, ol {{
-                margin-top: 5px;
-                margin-bottom: 15px;
-                padding-left: 20px;
-            }}
-            li {{
-                margin-bottom: 5px;
-                line-height: 1.5;
-            }}
-
-            /* 图片样式 */
-            img {{
-                zoom: 55%; /* 使用 zoom 缩放比 width 更稳定 */
-                margin: 15px auto;
-                display: block;
-                border: 1px solid #bdc3c7;
-                padding: 4px;
-                border-radius: 4px;
-            }}
-
-            /* 表格样式 */
-            table {{
-                width: 100%;
-                border-collapse: collapse;
-                margin: 15px 0;
-                font-size: 11px;
-            }}
-            th, td {{
-                border: 1px solid #bdc3c7;
-                padding: 8px;
-                text-align: left;
-            }}
-            th {{
-                background-color: #ecf0f1;
-                font-weight: bold;
-                color: #2c3e50;
-            }}
-
-            /* 引用块 (Blockquote) */
-            blockquote {{
-                border-left: 4px solid #3498db;
-                background-color: #f8f9fa;
-                padding: 10px 15px;
-                margin: 15px 0;
-                color: #555;
-                font-size: 11px;
-            }}
-
-            /* 代码块 */
+            
+            .header {{ text-align: center; margin-bottom: 20px; color: #7f8c8d; font-size: 10px; }}
+            
+            /* 代码块防溢出 */
             pre, code {{
-                background-color: #f5f5f5;
-                font-family: Helvetica, sans-serif;
-                font-size: 11px;
-                padding: 2px 4px;
-                border-radius: 3px;
                 white-space: pre-wrap;
-                -pdf-word-wrap: CJK; /* 代码块里的中文也要换行 */
                 word-wrap: break-word;
-            }}
-
-            .header {{
-                text-align: center;
-                margin-bottom: 20px;
-                color: #95a5a6;
-                font-size: 10px;
-                border-bottom: 1px solid #eee;
-                padding-bottom: 10px;
-            }}
-
-            hr {{
-                border: 0;
-                border-top: 1px solid #bdc3c7;
-                margin: 20px 0;
+                -pdf-word-wrap: CJK;
+                background: #f5f5f5;
             }}
         </style>
     </head>
     <body>
-        <div class="header">Wyckoff Quantitative Analysis Report | {symbol}</div>
-
+        <div class="header">Wyckoff Quantitative Analysis | {symbol}</div>
+        
         <div style="text-align: center;">
             <img src="{abs_chart_path}" />
         </div>
-
-        <hr/>
-
-        <div style="width: 100%;">
-            {html_content}
-        </div>
-
+        
+        <hr style="border: 0; border-top: 1px solid #eee; margin: 20px 0;"/>
+        
+        {html_content}
+        
         <div id="footerContent" style="text-align:center; font-size: 9px; color: gray;">
             Page <pdf:pagenumber>
         </div>
     </body>
     </html>
     """
-
     try:
-        # ✅ 核心修复：必须 encode 为 bytes，否则报错
+        # ✅ 核心修复：这里必须 encode，否则必报错
         with open(pdf_path, "wb") as pdf_file:
-            pisa.CreatePDF(
-                src=full_html.encode("utf-8"), 
-                dest=pdf_file,
-                encoding='utf-8'
-            )
+            pisa.CreatePDF(src=full_html.encode("utf-8"), dest=pdf_file)
         return True
     except Exception as e:
         print(f"   ❌ PDF 生成失败: {e}", flush=True)
         return False
+
+
+
+
 # ==========================================
 # 5. 主程序 (串行 + 30s 休息)
 # ==========================================
@@ -771,6 +643,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 

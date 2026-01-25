@@ -468,44 +468,34 @@ def ai_analyze(symbol, df, position_info):
 
 
 # ==========================================
-# 4. PDF 生成模块 (优化版：CSS控制CJK换行 + 清晰段落间距)
+# 4. PDF 生成模块 (终极融合版：美观样式 + 核心修复)
 # ==========================================
 
 def insert_soft_breaks(text: str) -> str:
     """
-    轻量化断行预处理：
-    仅处理 URL、路径、长串数字等容易造成溢出的非中文内容。
-    中文换行完全交给 xhtml2pdf 的 CSS (-pdf-word-wrap: CJK) 处理。
+    轻量化断行预处理：仅处理超长英文/数字串，防止撑爆页面。
+    中文换行完全交给 CSS 处理。
     """
-    if not text:
-        return ""
-
-    zwsp = chr(0x200B)
-
-    # 1) 统一换行符，防止不同平台的 \r\n 干扰 Markdown 解析
+    if not text: return ""
+    
+    # 统一换行符
     text = text.replace("\r\n", "\n").replace("\r", "\n")
 
-    # 2) 常见分隔符后插入 ZWSP (帮助 URL/路径/代码 换行)
-    #    只在 [/ _ - . = : ? & # %] 后面加，不碰普通内容
-    text = re.sub(r'([\/\_\-\.\=\:\?\&\#\%])', r'\1' + zwsp, text)
-
-    # 3) 超长连续英文数字串：每 30 字符强制打断
+    # 超长连续英文数字串打断 (每35字符加空格)
     def _break_long_token(m: re.Match) -> str:
         s = m.group(0)
-        step = 30
-        return zwsp.join(s[i:i + step] for i in range(0, len(s), step))
+        step = 35
+        return " ".join(s[i:i + step] for i in range(0, len(s), step))
 
     text = re.sub(r'[A-Za-z0-9]{50,}', _break_long_token, text)
-
     return text
 
 
 def generate_pdf_report(symbol: str, chart_path: str, report_text: str, pdf_path: str) -> bool:
-    # 1. 简单预处理
+    # 1. 预处理
     formatted_text = insert_soft_breaks(report_text)
 
-    # 2. Markdown -> HTML
-    #    使用 extra 支持更多语法，nl2br 处理换行
+    # 2. Markdown -> HTML (使用 extra 扩展以获得更好的排版支持)
     html_content = markdown.markdown(
         formatted_text,
         extensions=["extra", "sane_lists", "nl2br"]
@@ -513,7 +503,7 @@ def generate_pdf_report(symbol: str, chart_path: str, report_text: str, pdf_path
 
     abs_chart_path = os.path.abspath(chart_path)
 
-    # 字体路径检测
+    # 字体路径
     font_path = "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc"
     if not os.path.exists(font_path):
         font_path = "msyh.ttc"
@@ -530,11 +520,7 @@ def generate_pdf_report(symbol: str, chart_path: str, report_text: str, pdf_path
 
             @page {{
                 size: A4;
-                margin-top: 1.5cm;
-                margin-bottom: 1.5cm;
-                margin-left: 2cm;
-                margin-right: 2cm;
-
+                margin: 1.5cm; /* 适中的页边距 */
                 @frame footer_frame {{
                     -pdf-frame-content: footerContent;
                     bottom: 0cm;
@@ -544,28 +530,59 @@ def generate_pdf_report(symbol: str, chart_path: str, report_text: str, pdf_path
                 }}
             }}
 
+            /* 全局重置 (但不使用 * 选择器，避免副作用) */
             body {{
                 font-family: "MyChineseFont", sans-serif;
-                font-size: 11px;
-                line-height: 1.6;  /* 关键：增加行高，提升阅读舒适度 */
+                font-size: 12px;
+                line-height: 1.6; /* 增加行高，提升阅读感 */
                 color: #2c3e50;
-                text-align: justify;
-
-                /* 关键：启用 xhtml2pdf 的中文自动换行引擎 */
+                
+                /* ⚠️ 核心：强制中文自动换行 */
                 -pdf-word-wrap: CJK;
+                text-align: justify;
             }}
 
-            /* 关键：显式设置段落间距，防止文字粘连 */
+            /* ----------------------------------
+               段落感的核心设置
+               ---------------------------------- */
             p {{
                 margin-top: 0px;
-                margin-bottom: 10px;
+                margin-bottom: 12px; /* 段落间距，把文字撑开 */
                 text-indent: 0;
             }}
 
-            /* 列表优化 */
+            /* 标题样式 (参考了您的设计) */
+            h1 {{
+                font-size: 18px;
+                color: #2c3e50;
+                margin-top: 20px;
+                margin-bottom: 10px;
+                border-bottom: 2px solid #3498db; /* 蓝色下划线 */
+                padding-bottom: 5px;
+                font-weight: bold;
+            }}
+
+            h2 {{
+                font-size: 15px;
+                color: #2980b9;
+                margin-top: 18px;
+                margin-bottom: 10px;
+                font-weight: bold;
+            }}
+
+            h3 {{
+                font-size: 13px;
+                margin-top: 15px;
+                margin-bottom: 8px;
+                background-color: #f2f2f2;
+                padding: 5px;
+                border-left: 4px solid #3498db;
+            }}
+
+            /* 列表样式 */
             ul, ol {{
                 margin-top: 5px;
-                margin-bottom: 10px;
+                margin-bottom: 15px;
                 padding-left: 20px;
             }}
             li {{
@@ -573,69 +590,69 @@ def generate_pdf_report(symbol: str, chart_path: str, report_text: str, pdf_path
                 line-height: 1.5;
             }}
 
-            /* 标题样式 */
-            h1 {{ 
-                font-size: 16px; 
-                margin-top: 20px; 
-                margin-bottom: 10px; 
-                color: #e74c3c; 
-                border-bottom: 1px solid #eee; 
-                padding-bottom: 5px; 
-            }}
-            h2 {{ 
-                font-size: 14px; 
-                margin-top: 15px; 
-                margin-bottom: 8px; 
-                color: #2980b9; 
-                border-left: 4px solid #2980b9; 
-                padding-left: 8px; 
-            }}
-            h3 {{ 
-                font-size: 12px; 
-                margin-top: 10px; 
-                margin-bottom: 6px; 
-                font-weight: bold; 
-                background-color: #f2f2f2; 
-                padding: 4px; 
-            }}
-
             /* 图片样式 */
             img {{
-                zoom: 55%;
+                zoom: 55%; /* 使用 zoom 缩放比 width 更稳定 */
                 margin: 15px auto;
                 display: block;
-                border: 1px solid #ddd;
+                border: 1px solid #bdc3c7;
                 padding: 4px;
+                border-radius: 4px;
             }}
 
-            /* 页眉样式 */
+            /* 表格样式 */
+            table {{
+                width: 100%;
+                border-collapse: collapse;
+                margin: 15px 0;
+                font-size: 11px;
+            }}
+            th, td {{
+                border: 1px solid #bdc3c7;
+                padding: 8px;
+                text-align: left;
+            }}
+            th {{
+                background-color: #ecf0f1;
+                font-weight: bold;
+                color: #2c3e50;
+            }}
+
+            /* 引用块 (Blockquote) */
+            blockquote {{
+                border-left: 4px solid #3498db;
+                background-color: #f8f9fa;
+                padding: 10px 15px;
+                margin: 15px 0;
+                color: #555;
+                font-size: 11px;
+            }}
+
+            /* 代码块 */
+            pre, code {{
+                background-color: #f5f5f5;
+                font-family: Helvetica, sans-serif;
+                font-size: 11px;
+                padding: 2px 4px;
+                border-radius: 3px;
+                white-space: pre-wrap;
+                -pdf-word-wrap: CJK; /* 代码块里的中文也要换行 */
+                word-wrap: break-word;
+            }}
+
             .header {{
                 text-align: center;
                 margin-bottom: 20px;
                 color: #95a5a6;
                 font-size: 10px;
                 border-bottom: 1px solid #eee;
-                padding-bottom: 8px;
+                padding-bottom: 10px;
             }}
 
-            /* 引用块样式 */
-            blockquote {{
-                background: #f9f9f9;
-                border-left: 4px solid #ccc;
-                margin: 10px 0;
-                padding: 8px 12px;
-                color: #666;
-                font-size: 10px;
-            }}
-
-            /* 代码块样式 */
-            pre, code {{
-                background-color: #f4f4f4;
-                font-family: Helvetica, sans-serif;
-                font-size: 10px;
-                white-space: pre-wrap;
-                -pdf-word-wrap: CJK; /* 确保代码块里的中文也能换行 */
-                word-wrap: break-word;
+            hr {{
+                border: 0;
+                border-top: 1px solid #bdc3c7;
+                margin: 20px 0;
             }}
         </style>
     </head>
@@ -646,7 +663,7 @@ def generate_pdf_report(symbol: str, chart_path: str, report_text: str, pdf_path
             <img src="{abs_chart_path}" />
         </div>
 
-        <hr style="border: 0; border-top: 1px solid #eee; margin: 15px 0;"/>
+        <hr/>
 
         <div style="width: 100%;">
             {html_content}
@@ -660,13 +677,17 @@ def generate_pdf_report(symbol: str, chart_path: str, report_text: str, pdf_path
     """
 
     try:
+        # ✅ 核心修复：必须 encode 为 bytes，否则报错
         with open(pdf_path, "wb") as pdf_file:
-            pisa.CreatePDF(full_html, dest=pdf_file)
+            pisa.CreatePDF(
+                src=full_html.encode("utf-8"), 
+                dest=pdf_file,
+                encoding='utf-8'
+            )
         return True
     except Exception as e:
         print(f"   ❌ PDF 生成失败: {e}", flush=True)
         return False
-        
 # ==========================================
 # 5. 主程序 (串行 + 30s 休息)
 # ==========================================
@@ -750,6 +771,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
